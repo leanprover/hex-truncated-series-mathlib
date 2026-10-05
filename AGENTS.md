@@ -1,0 +1,228 @@
+# Hex repo family
+
+`hex-dev` is the development monorepo where new Hex sublibraries are
+incubated before they are split out for release. `hex` is the released
+aggregate repo; it depends on one shared semantic version of the released
+split libraries.
+
+The authoritative list of split repos published from `hex-dev` is
+[`scripts/release/released.yml`](scripts/release/released.yml), which
+lists them in topological (upstream-first) order along with each repo's
+library name, SPEC, fixtures, oracles and cross-repo pins. Read that
+file rather than a list restated elsewhere: the set grows as new
+sublibraries are released, and prose copies go stale.
+
+Two structural things the manifest encodes:
+
+- `hex-test-kit` is the shared conformance/bench helper library
+  (source: `Hex/`), not user-facing Hex API.
+- `leanprover/hex` is `pins_only`: it publishes no library source and is
+  re-pinned to the shared version synced each run, so it is listed last. Its README
+  is generated from `scripts/release/hex-README.md` plus the manifest's
+  `component:` labels (see [SPEC/readme.md](SPEC/readme.md)).
+
+Computational libraries are Mathlib-free; `*-mathlib` repos are the
+Mathlib bridge layers and should contain correspondence proofs and
+Mathlib-facing APIs.
+
+## Source-of-truth model: develop here, publish outward
+
+`hex-dev` is the **single source of truth** for every library. All
+development happens in this one tree; a single `lake build` (plus the
+`bench/` and `conformance/` sub-projects) builds everything together.
+The split repos are **published mirrors**: a dispatchable CI
+workflow regenerates each one from the matching content in `hex-dev`,
+rewriting their cross-repo Lake requirements, committing to their `main`, and
+tagging every mirror with the same release version.
+Never hand-edit a released repo; change it here and let the sync publish.
+
+Every library uses the same per-library layout (so the publish step is a
+near-mechanical copy):
+
+- `HexX/` — library source plus the `HexX.lean` umbrella.
+- `HexX/SPEC/hex-x.md` — the library's SPEC.
+- `bench/HexX/Bench.lean` — bench drivers (shared `bench/` sub-project).
+- `conformance/HexX/{Conformance,EmitFixtures}.lean` — conformance
+  drivers (shared `conformance/` sub-project).
+- `conformance-fixtures/HexX/*.jsonl`, `scripts/oracle/<lib>_*.py`.
+- `.github/workflows/ci.yml` — selected from the complete per-repository
+  workflows in `scripts/release/released-ci.yml`.
+
+The publish mechanism is `scripts/release/released.yml` (the per-repo
+managed-path + pin manifest), `scripts/release/released-ci.yml` (the managed
+mirror CI workflows), `scripts/release/sync_released.py` (the
+driver; supports `--dry-run`), `scripts/release/synced.json` (the
+per-repo `main` baseline and shared release version), and
+`.github/workflows/sync-released.yml` (manual dispatch, dry by default).
+A real sync overwrites each released repo's managed paths, rewrites its Hex
+requirements to the next shared minor version, and tags the resulting commit,
+so it must only run once this monorepo is at or ahead of
+every released repo's `main`. Run `--dry-run` first.
+
+**Uncoordinated-commit guard.** The sync refuses to overwrite a released
+repo whose `main` HEAD has moved off the recorded baseline, so an
+out-of-band commit on a released repo is never silently clobbered; it
+skips that repo and reports the divergence (override with `--force` only
+after reconciling). Reconciling means **re-seeding**: bring the affected
+library's content here up to the released `main`, rebuild the whole graph
+green (a released repo can advance with breaking API changes its
+downstream consumers have not adopted — the monorepo build surfaces
+that), then re-run the sync.
+
+The baseline lives on a dedicated, unprotected `release-sync-baseline`
+branch that the workflow reads and advances on every real run, so a single
+`workflow_dispatch` (dry-run first, then `dry_run=false`) drives the whole
+publish through with no follow-up. A partial failure leaves a pending release
+bound to its source commit, and the retry completes that version rather than
+incrementing again. `scripts/release/synced.json` is the
+bootstrap seed used only before that branch exists.
+
+# hex — agent-specific conventions
+
+Conventions specifically for LLM agents working on this project.
+General project doctrine (Mathlib-free split, SPEC/PLAN structure,
+key files) lives in `SPEC/` and `PLAN.md`; start there for
+orientation.
+
+## Style
+
+Don't add "research completed" timestamps, progress notes, or
+meta-commentary about the history of our research process to any
+file. The git history tracks that. SPEC files and `PLAN/` contain
+the current state of the design, not a journal of how we got there.
+
+## Mathematical terminology
+
+Use only standard terminology an expert in Berlekamp–Zassenhaus and LLL
+recognizes immediately — no coined jargon or private coordinate names —
+and let proofs track the operations the executable performs rather than a
+parallel reformulation of them.
+
+## Lean
+
+Check diagnostics after every step; don't continue past errors. Build
+via `lake build`, not `lean` directly. `native_decide` is banned (see
+SPEC).
+
+Never introduce an `axiom`. This includes converting an existing
+`theorem`/`def`/`example` into an `axiom` when a refactor breaks its
+proof — fix the proof or fix the API. For unfinished proofs use
+`sorry`, which is grep-able and produces a warning; `axiom` is silent.
+
+## Directives are hypotheses, not specs
+
+A directive is an issue that requests a SPEC- or PLAN-mandated outcome;
+it does not require a particular GitHub label.
+
+When you work on a directive issue, the body is the author's *current
+best understanding* of what the work looks like. It is not gospel.
+Before opening a PR, sanity-check the premise:
+
+- Does the type signature the directive asks for actually admit a
+  proof, or is it unsoundly typed (allows non-canonical witnesses,
+  missing hypotheses, vacuous quantifiers)?
+- Does the existing infrastructure the directive points at actually
+  support the claimed composition, or is a key bridge missing?
+- Is the decomposition the directive proposes the right one, or
+  would a different split close the obligation in fewer pieces?
+
+If the premise is sound: execute. If the premise is wrong: **stop,
+comment on the issue explaining what's wrong with concrete
+evidence (counterexample, missing-lemma shape, infrastructure
+gap), and leave the issue open for an updated directive.**
+Do *not* file a sub-decomposition issue as a workaround; that
+escalates the problem rather than fixing it. Do *not* invent
+sorries or axioms to bash through. Do *not* silently weaken the
+theorem to make a proof go through; that hides the premise problem
+from the next reviewer.
+
+A worker who correctly diagnoses an unsound directive saves more
+project time than one who lands a partial PR against it.
+
+The author of a directive (often me or another agent) cannot see
+every interaction with existing types and lemmas at directive-
+authoring time. Reading the source, finding the contradiction, and
+posting it back is the highest-leverage thing you can do when the
+directive doesn't match reality.
+
+## Naming: short verb-noun forms
+
+Type / def / theorem names with more than ~3 qualifiers are a
+smell. If you find yourself writing five or more qualifying words,
+stop and rethink:
+
+- Often the qualifiers belong in a namespace, not the name.
+- Often the name is restating *use-site context* ("Initial",
+  "Regular", "Step") rather than naming the *thing*. Find the
+  noun.
+- The Mathlib aesthetic to imitate: short verb-noun forms,
+  qualifiers in namespaces. `Matrix.det`, not
+  `MatrixLeibnizExpandedFiniteDeterminantValue`.
+
+When you encounter an existing AI-slop name with 5+ qualifiers
+(the pattern from a model adding defensive disambiguation), rename
+it. Long names are tech debt; the next agent has to keep them
+exactly as long. Renaming is cheap; preserving slop is expensive.
+
+Concrete heuristic: if a name's qualifier list reads like a
+sentence describing what it's used for, that sentence belongs in
+the docstring, and the name should be the noun.
+
+## CI: extend, don't fan out
+
+Before touching anything under `.github/workflows/`, read
+[SPEC/CI.md](../SPEC/CI.md). Each workflow runs in **exactly one
+ubuntu job** (`ci.yml` also has one macOS job for the dyld
+cross-check). New conformance targets, new oracles, and new bench
+targets **extend the script** of the existing single job — they do
+not introduce new top-level jobs, `strategy.matrix` blocks, or new
+workflow files. New oracles append a tuple to
+`scripts/ci/run_oracles.sh` and (if needed) an entry to the existing
+apt/pip install step; see
+[SPEC/testing.md § Adding a new oracle](../SPEC/testing.md).
+
+Bench targets in particular must not import Mathlib (directly or
+transitively) and must keep the `Bench verify` step under its
+wallclock cap; see
+[SPEC/benchmarking.md §Mathlib-free benches](../SPEC/benchmarking.md)
+and the "Time budget" subsection of
+[SPEC/benchmarking.md §CI integration](../SPEC/benchmarking.md).
+
+## Performance measurements use the shared host
+
+There is no dedicated performance machine. Treat host activity as recorded
+context, never as a reason to discard a completed sample or wait for a quiet
+core. Pin a measurement to one automatically selected CPU when the runner
+supports it, to avoid two Hex measurements choosing the same CPU; the selected
+CPU need not be idle. Ordinary complexity evidence uses lean-bench's fixed,
+trial-major schedule. Before/after comparisons run adjacent arms and alternate
+`AB`/`BA` order. Retain every completed run and allow at most one unchanged
+rerun after an inconclusive result. Do not add quiet-core preflights,
+contamination thresholds, retry-until-clean loops, mandatory null controls, or
+per-change profiles. Profile only to explain an unexpected result or to supply
+one required representative Phase-4 attribution. Absolute wall-clock values
+are host-specific observations; CI timeouts are operational safeguards, not
+scientific budgets.
+
+GitHub-hosted Actions on a personal account is concurrency-capped at
+~20 parallel ubuntu runners across all repositories the account
+owns; a 10-entry matrix saturates the cap, a 40-entry matrix
+produces 24-hour queue waits. Per-target parallelism does not
+amortise the fixed Mathlib cache fetch and startup cost on this
+project, so the rule is "no parallelism in CI." Routine timing-
+sensitive runs are collected manually on the shared host (per
+[SPEC/benchmarking.md](../SPEC/benchmarking.md)), not on the
+merge-gating workflows.
+
+## Work assignment
+
+Work is assigned by hand through GitHub issues, one issue per SPEC.
+Use the assigned issue and its linked SPEC to determine the scope.
+Use `PLAN.md` and `PLAN/` as phase reference material; the assignment
+workflow here governs issue selection and progress reporting.
+
+## Off-limits files
+
+Agents must not modify `AGENTS.md` (also read through the
+`.claude/CLAUDE.md` symlink) or the roadmap file `PLAN.md` unless
+explicitly instructed to edit them.
