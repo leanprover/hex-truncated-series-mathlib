@@ -9,7 +9,7 @@ leanOptions = [
 [[require]]
 name = "HexTruncatedSeries"
 git = "https://github.com/leanprover/hex-truncated-series.git"
-rev = "main"
+rev = "v0.7.0"
 
 [[require]]
 name = "mathlib"
